@@ -129,6 +129,94 @@ from nvitop.api.utils import (
     memoize_when_activated,
 )
 
+# AMD GPU support - lazy imports to avoid hard dependency
+_amd_support_checked = False
+_amd_available = False
+_nvml_available = None  # None = not checked, True/False = result
+
+
+def _check_nvml_available():
+    """Check if NVML is available without triggering noisy error messages."""
+    global _nvml_available  # noqa: PLW0603
+    if _nvml_available is None:
+        import logging  # noqa: PLC0415
+
+        # Temporarily suppress NVML logger to avoid "FATAL ERROR" messages on AMD systems
+        nvml_logger = logging.getLogger('nvitop.api.libnvml')
+        old_level = nvml_logger.level
+        nvml_logger.setLevel(logging.CRITICAL + 1)  # Suppress all logging
+        try:
+            libnvml.nvmlQuery('nvmlSystemGetDriverVersion')
+            _nvml_available = True
+        except Exception:  # noqa: BLE001
+            _nvml_available = False
+        finally:
+            nvml_logger.setLevel(old_level)
+    return _nvml_available
+
+
+def _safe_nvml_query(func_name, *args, default=0):
+    """Call nvmlQuery but suppress NVML init errors when NVML is not available."""
+    global _nvml_available  # noqa: PLW0603
+    import logging  # noqa: PLC0415
+
+    if _nvml_available is False:
+        return default
+
+    nvml_logger = logging.getLogger('nvitop.api.libnvml')
+    old_level = nvml_logger.level
+    if _nvml_available is None:
+        # First time - suppress logging during probe
+        nvml_logger.setLevel(logging.CRITICAL + 1)
+    try:
+        result = libnvml.nvmlQuery(func_name, *args, default=default)
+        _nvml_available = True
+        return result
+    except libnvml.NVMLError:
+        _nvml_available = False
+        return default
+    finally:
+        if old_level != nvml_logger.level:
+            nvml_logger.setLevel(old_level)
+
+
+def _check_amd_support():
+    """Check if AMD GPU support is available (lazy, cached)."""
+    global _amd_support_checked, _amd_available  # noqa: PLW0603
+    if not _amd_support_checked:
+        try:
+            from nvitop.api import libamdsmi  # noqa: PLC0415
+
+            _amd_available = libamdsmi.is_available()
+        except Exception:  # noqa: BLE001
+            _amd_available = False
+        _amd_support_checked = True
+    return _amd_available
+
+
+def _get_amd_devices(indices=None):
+    """Get AMD device instances. Returns empty list if AMD not available."""
+    if not _check_amd_support():
+        return []
+    try:
+        from nvitop.api.amd_device import AmdPhysicalDevice  # noqa: PLC0415
+
+        return AmdPhysicalDevice.from_indices(indices)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _get_amd_device_count():
+    """Get count of AMD GPUs."""
+    if not _check_amd_support():
+        return 0
+    try:
+        from nvitop.api.amd_device import AmdPhysicalDevice  # noqa: PLC0415
+
+        return AmdPhysicalDevice.count()
+    except Exception:  # noqa: BLE001
+        return 0
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Hashable, Iterable
@@ -330,15 +418,20 @@ class Device:  # pylint: disable=too-many-instance-attributes,too-many-public-me
 
     @classmethod
     def is_available(cls) -> bool:
-        """Test whether there are any devices and the NVML library is successfully loaded."""
+        """Test whether there are any devices (NVIDIA or AMD) available."""
         try:
-            return cls.count() > 0
+            count = cls.count()
+            return count > 0
         except libnvml.NVMLError:
-            return False
+            # NVML failed, but AMD GPUs might still be available
+            return _check_amd_support()
 
     @staticmethod
     def driver_version() -> str | NaType:
-        """The version of the installed NVIDIA display driver. This is an alphanumeric string.
+        """The version of the installed GPU driver. This is an alphanumeric string.
+
+        For NVIDIA GPUs, returns the NVIDIA display driver version.
+        For AMD GPUs, returns the amdgpu driver version.
 
         Command line equivalent:
 
@@ -348,34 +441,46 @@ class Device:  # pylint: disable=too-many-instance-attributes,too-many-public-me
 
         Raises:
             libnvml.NVMLError_LibraryNotFound:
-                If cannot find the NVML library, usually the NVIDIA driver is not installed.
+                If cannot find the NVML library and no AMD GPUs are available.
             libnvml.NVMLError_DriverNotLoaded:
-                If NVIDIA driver is not loaded.
+                If NVIDIA driver is not loaded and no AMD GPUs are available.
             libnvml.NVMLError_LibRmVersionMismatch:
                 If RM detects a driver/library version mismatch, usually after an upgrade for NVIDIA
                 driver without reloading the kernel module.
         """
-        return libnvml.nvmlQuery('nvmlSystemGetDriverVersion')
+        result = _safe_nvml_query('nvmlSystemGetDriverVersion', default=NA)
+        if result is not NA:
+            return result
+        # Fallback to AMD driver version
+        if _check_amd_support():
+            try:
+                from nvitop.api.amd_device import AmdPhysicalDevice  # noqa: PLC0415
+
+                return AmdPhysicalDevice.driver_version()
+            except Exception:  # noqa: BLE001
+                pass
+        return NA
 
     @staticmethod
     def cuda_driver_version() -> str | NaType:
-        """The maximum CUDA version supported by the NVIDIA display driver. This is an alphanumeric string.
+        """The maximum CUDA/ROCm version supported by the GPU driver.
 
-        This can be different from the version of the CUDA Runtime. See also :meth:`cuda_runtime_version`.
+        For NVIDIA GPUs, returns the maximum CUDA version supported by the display driver.
+        For AMD GPUs, returns the ROCm version.
 
         Returns: Union[str, NaType]
-            The maximum CUDA version supported by the NVIDIA display driver.
+            The maximum CUDA/ROCm version supported by the GPU driver.
 
         Raises:
             libnvml.NVMLError_LibraryNotFound:
-                If cannot find the NVML library, usually the NVIDIA driver is not installed.
+                If cannot find the NVML library and no AMD GPUs are available.
             libnvml.NVMLError_DriverNotLoaded:
-                If NVIDIA driver is not loaded.
+                If NVIDIA driver is not loaded and no AMD GPUs are available.
             libnvml.NVMLError_LibRmVersionMismatch:
                 If RM detects a driver/library version mismatch, usually after an upgrade for NVIDIA
                 driver without reloading the kernel module.
         """
-        cuda_driver_version = libnvml.nvmlQuery('nvmlSystemGetCudaDriverVersion')
+        cuda_driver_version = _safe_nvml_query('nvmlSystemGetCudaDriverVersion', default=NA)
         if libnvml.nvmlCheckReturn(cuda_driver_version, int):
             major = cuda_driver_version // 1000
             minor = (cuda_driver_version % 1000) // 10
@@ -383,6 +488,14 @@ class Device:  # pylint: disable=too-many-instance-attributes,too-many-public-me
             if revision == 0:
                 return f'{major}.{minor}'
             return f'{major}.{minor}.{revision}'
+        # Fallback to ROCm version for AMD GPUs
+        if _check_amd_support():
+            try:
+                from nvitop.api.amd_device import AmdPhysicalDevice  # noqa: PLC0415
+
+                return AmdPhysicalDevice.rocm_version()
+            except Exception:  # noqa: BLE001
+                pass
         return NA
 
     max_cuda_version = cuda_driver_version
@@ -406,7 +519,7 @@ class Device:  # pylint: disable=too-many-instance-attributes,too-many-public-me
 
     @classmethod
     def count(cls) -> int:
-        """The number of NVIDIA GPUs in the system.
+        """The number of GPUs (NVIDIA + AMD) in the system.
 
         Command line equivalent:
 
@@ -416,18 +529,20 @@ class Device:  # pylint: disable=too-many-instance-attributes,too-many-public-me
 
         Raises:
             libnvml.NVMLError_LibraryNotFound:
-                If cannot find the NVML library, usually the NVIDIA driver is not installed.
+                If cannot find the NVML library and no AMD GPUs are available.
             libnvml.NVMLError_DriverNotLoaded:
-                If NVIDIA driver is not loaded.
+                If NVIDIA driver is not loaded and no AMD GPUs are available.
             libnvml.NVMLError_LibRmVersionMismatch:
                 If RM detects a driver/library version mismatch, usually after an upgrade for NVIDIA
                 driver without reloading the kernel module.
         """
-        return libnvml.nvmlQuery('nvmlDeviceGetCount', default=0)
+        nvidia_count = _safe_nvml_query('nvmlDeviceGetCount', default=0)
+        amd_count = _get_amd_device_count()
+        return nvidia_count + amd_count
 
     @classmethod
     def all(cls) -> list[PhysicalDevice]:
-        """Return a list of all physical devices in the system."""
+        """Return a list of all physical devices (NVIDIA and AMD) in the system."""
         return cls.from_indices()  # type: ignore[return-value]
 
     @classmethod
@@ -437,21 +552,25 @@ class Device:  # pylint: disable=too-many-instance-attributes,too-many-public-me
     ) -> list[Self]:
         """Return a list of devices of the given indices.
 
+        The indices are unified across NVIDIA and AMD GPUs:
+        - NVIDIA GPUs are indexed first (0, 1, ..., N-1)
+        - AMD GPUs follow (N, N+1, ..., N+M-1)
+
         Args:
             indices (Iterable[Union[int, Tuple[int, int]]]):
                 Indices of the devices. For each index, get :class:`PhysicalDevice` for single int
                 and :class:`MigDevice` for tuple (int, int). That is:
-                - (int)        -> PhysicalDevice
-                - ((int, int)) -> MigDevice
+                - (int)        -> PhysicalDevice (NVIDIA or AMD)
+                - ((int, int)) -> MigDevice (NVIDIA only)
 
-        Returns: List[Union[PhysicalDevice, MigDevice]]
-            A list of :class:`PhysicalDevice` and/or :class:`MigDevice` instances of the given indices.
+        Returns: List[Union[PhysicalDevice, MigDevice, AmdPhysicalDevice]]
+            A list of device instances of the given indices.
 
         Raises:
             libnvml.NVMLError_LibraryNotFound:
-                If cannot find the NVML library, usually the NVIDIA driver is not installed.
+                If cannot find the NVML library and no AMD GPUs are available.
             libnvml.NVMLError_DriverNotLoaded:
-                If NVIDIA driver is not loaded.
+                If NVIDIA driver is not loaded and no AMD GPUs are available.
             libnvml.NVMLError_LibRmVersionMismatch:
                 If RM detects a driver/library version mismatch, usually after an upgrade for NVIDIA
                 driver without reloading the kernel module.
@@ -460,16 +579,43 @@ class Device:  # pylint: disable=too-many-instance-attributes,too-many-public-me
             libnvml.NVMLError_InvalidArgument:
                 If the device index is out of range.
         """
+        nvidia_count = _safe_nvml_query('nvmlDeviceGetCount', default=0)
+        amd_count = _get_amd_device_count()
+
         if indices is None:
-            try:
-                indices = range(cls.count())
-            except libnvml.NVMLError:
+            total = nvidia_count + amd_count
+            if total == 0:
                 return []
+            indices = range(total)
 
         if isinstance(indices, int):
             indices = [indices]
 
-        return list(map(cls, indices))
+        devices = []
+        for idx in indices:
+            if isinstance(idx, tuple):
+                # MIG device - always NVIDIA
+                try:
+                    devices.append(cls(index=idx))
+                except libnvml.NVMLError:
+                    pass
+            elif isinstance(idx, int) and idx >= nvidia_count and amd_count > 0:
+                # AMD GPU index
+                amd_idx = idx - nvidia_count
+                amd_devices = _get_amd_devices([amd_idx])
+                if amd_devices:
+                    # Adjust the index stored in the AMD device to be the unified index
+                    amd_dev = amd_devices[0]
+                    amd_dev._nvml_index = idx  # noqa: SLF001
+                    devices.append(amd_dev)  # type: ignore[arg-type]
+            else:
+                # NVIDIA GPU index
+                try:
+                    devices.append(cls(index=idx))
+                except libnvml.NVMLError:
+                    pass
+
+        return devices
 
     @staticmethod
     def from_cuda_visible_devices() -> list[CudaDevice]:

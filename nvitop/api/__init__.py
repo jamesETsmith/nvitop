@@ -21,6 +21,7 @@ from nvitop.api import (
     collector,
     device,
     host,
+    libamdsmi,
     libcuda,
     libcudart,
     libnvml,

@@ -4,7 +4,7 @@
 # pylint: disable=missing-module-docstring
 
 from nvitop.tui.library import host
-from nvitop.tui.library.device import Device, MigDevice
+from nvitop.tui.library.device import AmdDevice, Device, MigDevice
 from nvitop.tui.library.displayable import Displayable, DisplayableContainer
 from nvitop.tui.library.history import BufferedHistoryGraph, HistoryGraph
 from nvitop.tui.library.keybinding import (
@@ -62,6 +62,7 @@ __all__ = [
     'USERNAME',
     'USER_CONTEXT',
     'BufferedHistoryGraph',
+    'AmdDevice',
     'Device',
     'Displayable',
     'DisplayableContainer',

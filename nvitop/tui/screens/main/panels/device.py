@@ -82,6 +82,15 @@ class DevicePanel(BasePanel):  # pylint: disable=too-many-instance-attributes
         self.driver_version: str = Device.driver_version()
         self.cuda_driver_version: str = Device.cuda_driver_version()
 
+        # Detect if we have AMD GPUs to adjust header labels
+        self._has_amd_devices: bool = False
+        try:
+            from nvitop.api.device import _check_amd_support  # noqa: PLC0415
+
+            self._has_amd_devices = _check_amd_support()
+        except Exception:  # noqa: BLE001
+            pass
+
         self._snapshot_buffer: list[Snapshot] = []
         self._snapshots: list[Snapshot] = []
         self.snapshot_lock = threading.Lock()
@@ -176,6 +185,8 @@ class DevicePanel(BasePanel):  # pylint: disable=too-many-instance-attributes
         for device in snapshots:
             if device.name.startswith('NVIDIA '):
                 device.name = device.name.replace('NVIDIA ', '', 1)
+            elif device.name.startswith('AMD '):
+                device.name = device.name.replace('AMD ', '', 1)
             if device.is_mig_device:
                 device.name = device.name.rpartition(' ')[-1]
                 if device.bar1_memory_percent is not NA:
@@ -216,10 +227,11 @@ class DevicePanel(BasePanel):  # pylint: disable=too-many-instance-attributes
         if compact is None:
             compact = self.compact
 
+        cuda_label = 'ROCm Version' if self._has_amd_devices else 'CUDA Driver Version'
         version_infos = [
             'NVITOP {}'.format(__version__.partition('+')[0]),
             f'Driver Version: {self.driver_version}',
-            f'CUDA Driver Version: {self.cuda_driver_version}',
+            f'{cuda_label}: {self.cuda_driver_version}',
         ]
         if sum(len(v) for v in version_infos) % 2 == 0:
             version_infos[0] += ' '

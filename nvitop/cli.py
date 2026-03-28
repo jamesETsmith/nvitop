@@ -299,13 +299,25 @@ def main() -> int:
     try:
         device_count = Device.count()
     except libnvml.NVMLError_LibraryNotFound:
-        return 1
+        # NVML not found, but AMD GPUs might be available
+        from nvitop.api.device import _check_amd_support, _get_amd_device_count  # noqa: PLC0415
+
+        if _check_amd_support():
+            device_count = _get_amd_device_count()
+        else:
+            return 1
     except libnvml.NVMLError as ex:
-        print(
-            '{} {}'.format(colored('NVML ERROR:', color='red', attrs=('bold',)), ex),
-            file=sys.stderr,
-        )
-        return 1
+        # NVML error, but AMD GPUs might be available
+        from nvitop.api.device import _check_amd_support, _get_amd_device_count  # noqa: PLC0415
+
+        if _check_amd_support():
+            device_count = _get_amd_device_count()
+        else:
+            print(
+                '{} {}'.format(colored('NVML ERROR:', color='red', attrs=('bold',)), ex),
+                file=sys.stderr,
+            )
+            return 1
 
     if args.gpu_util_thresh is not None:
         Device.GPU_UTILIZATION_THRESHOLDS = tuple(sorted(args.gpu_util_thresh))
