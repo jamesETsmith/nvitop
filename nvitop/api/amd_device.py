@@ -70,13 +70,17 @@ class AmdPhysicalDevice(Device):
         *,
         uuid: str | None = None,
         bus_id: str | None = None,
+        unified_index: int | None = None,
     ) -> None:
         """Initialize an AMD GPU device.
 
         Args:
-            index: The AMD GPU index (0-based within AMD GPUs only).
+            index: The AMD-local GPU index (0-based within AMD GPUs only).
             uuid: The UUID of the AMD GPU.
             bus_id: The PCI bus ID of the AMD GPU.
+            unified_index: Optional unified index across NVIDIA+AMD GPUs. When
+                provided this is what ``device.index`` reports; the AMD-local
+                index is preserved separately and never mutated post-construction.
         """
         # Do NOT call super().__init__() because it tries to use NVML
         # Instead, initialize the same attributes manually
@@ -95,15 +99,18 @@ class AmdPhysicalDevice(Device):
         self._handle = None  # Not used for AMD, but keep for compatibility
 
         # Initialize AMD SMI
-        libamdsmi._lazy_init()
+        libamdsmi.lazy_init()
 
         # Get AMD GPU handles
         gpu_handles = self._get_amd_handles()
 
         self._amd_handle = None
+        # _amd_index: stable AMD-local index; _nvml_index: unified index for display
+        self._amd_index: int | None = None
 
         if index is not None:
-            self._nvml_index = index
+            self._amd_index = index
+            self._nvml_index = unified_index if unified_index is not None else index
             if index < len(gpu_handles):
                 self._amd_handle = gpu_handles[index]
             else:
@@ -119,11 +126,13 @@ class AmdPhysicalDevice(Device):
                     )
                     if dev_uuid is not None and uuid.lower() in str(dev_uuid).lower():
                         self._amd_handle = h
-                        self._nvml_index = i
+                        self._amd_index = i
+                        self._nvml_index = unified_index if unified_index is not None else i
                         break
                 except Exception:  # noqa: BLE001
                     pass
             if self._amd_handle is None:
+                self._amd_index = None
                 self._nvml_index = NA  # type: ignore[assignment]
                 self._name = f'ERROR: AMD GPU with UUID {uuid} not found'
         elif bus_id is not None:
@@ -138,11 +147,13 @@ class AmdPhysicalDevice(Device):
                     )
                     if dev_bdf is not None and bus_id_str.lower() in str(dev_bdf).lower():
                         self._amd_handle = h
-                        self._nvml_index = i
+                        self._amd_index = i
+                        self._nvml_index = unified_index if unified_index is not None else i
                         break
                 except Exception:  # noqa: BLE001
                     pass
             if self._amd_handle is None:
+                self._amd_index = None
                 self._nvml_index = NA  # type: ignore[assignment]
                 self._name = f'ERROR: AMD GPU with bus ID {bus_id} not found'
 
@@ -180,7 +191,7 @@ class AmdPhysicalDevice(Device):
     def driver_version() -> str | NaType:
         """The version of the AMD GPU driver."""
         try:
-            libamdsmi._lazy_init()
+            libamdsmi.lazy_init()
             handles = libamdsmi.get_gpu_handles()
             if handles:
                 driver_info = libamdsmi.amdsmi_query(
@@ -207,7 +218,7 @@ class AmdPhysicalDevice(Device):
     def rocm_version() -> str | NaType:
         """The ROCm version."""
         try:
-            libamdsmi._lazy_init()
+            libamdsmi.lazy_init()
             amdsmi = libamdsmi.get_amdsmi_module()
             version = amdsmi.amdsmi_get_rocm_version()
             if isinstance(version, tuple):
@@ -303,7 +314,7 @@ class AmdPhysicalDevice(Device):
 
     def __reduce__(self):
         """Return state information for pickling."""
-        return self.__class__, (self._nvml_index,)
+        return self.__class__, (self._amd_index,)
 
     @property
     def handle(self):
@@ -817,10 +828,14 @@ class AmdPhysicalDevice(Device):
         except Exception:  # noqa: BLE001
             pass
 
-        # Method 2: Fallback to system-wide compute process info
+        # Method 2: Fallback using per-PID GPU info for this specific device.
+        # We intentionally avoid amdsmi_get_gpu_compute_process_info() (no args)
+        # because it returns system-wide processes across ALL AMD GPUs, which
+        # would incorrectly attribute every process to every GPU on multi-GPU
+        # systems.  Instead we try the device-scoped overload or skip entirely.
         if len(processes) == 0:
             try:
-                compute_procs = amdsmi.amdsmi_get_gpu_compute_process_info()
+                compute_procs = amdsmi.amdsmi_get_gpu_compute_process_info(self._amd_handle)
                 for proc_info in compute_procs:
                     if isinstance(proc_info, dict):
                         pid = proc_info.get('process_id', proc_info.get('pid', None))

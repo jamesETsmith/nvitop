@@ -35,6 +35,11 @@ __all__ = [
     'amdsmi_query',
     'is_available',
     'check_return',
+    'lazy_init',
+    'amd_device_count',
+    'get_amdsmi_module',
+    'get_gpu_handles',
+    'get_gpu_count',
 ]
 
 
@@ -217,6 +222,16 @@ def get_amdsmi_module():
     """Get the underlying amdsmi module."""
     _lazy_init()
     return _amdsmi
+
+
+def lazy_init() -> None:
+    """Public alias for thread-safe lazy initialization of AMD SMI."""
+    _lazy_init()
+
+
+def amd_device_count() -> int:
+    """Return the number of AMD GPUs, or 0 if AMD SMI is unavailable."""
+    return get_gpu_count()
 
 
 # Temperature types

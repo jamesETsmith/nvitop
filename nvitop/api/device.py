@@ -194,14 +194,37 @@ def _check_amd_support():
     return _amd_available
 
 
-def _get_amd_devices(indices=None):
-    """Get AMD device instances. Returns empty list if AMD not available."""
+def _get_amd_devices(indices=None, unified_offset=0):
+    """Get AMD device instances. Returns empty list if AMD not available.
+
+    Args:
+        indices: AMD-local indices to instantiate.
+        unified_offset: Added to each AMD-local index to produce the unified
+            index stored on the device, avoiding post-construction mutation.
+    """
     if not _check_amd_support():
         return []
     try:
         from nvitop.api.amd_device import AmdPhysicalDevice  # noqa: PLC0415
 
-        return AmdPhysicalDevice.from_indices(indices)
+        if indices is None:
+            amd_count = AmdPhysicalDevice.count()
+            indices = range(amd_count)
+        elif isinstance(indices, int):
+            indices = [indices]
+
+        devices = []
+        for amd_idx in indices:
+            try:
+                devices.append(
+                    AmdPhysicalDevice(
+                        index=amd_idx,
+                        unified_index=amd_idx + unified_offset,
+                    )
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        return devices
     except Exception:  # noqa: BLE001
         return []
 
@@ -600,14 +623,12 @@ class Device:  # pylint: disable=too-many-instance-attributes,too-many-public-me
                 except libnvml.NVMLError:
                     pass
             elif isinstance(idx, int) and idx >= nvidia_count and amd_count > 0:
-                # AMD GPU index
+                # AMD GPU index: construct with the correct unified_index so no
+                # post-construction mutation of cached objects is required.
                 amd_idx = idx - nvidia_count
-                amd_devices = _get_amd_devices([amd_idx])
-                if amd_devices:
-                    # Adjust the index stored in the AMD device to be the unified index
-                    amd_dev = amd_devices[0]
-                    amd_dev._nvml_index = idx  # noqa: SLF001
-                    devices.append(amd_dev)  # type: ignore[arg-type]
+                amd_devs = _get_amd_devices([amd_idx], unified_offset=nvidia_count)
+                if amd_devs:
+                    devices.append(amd_devs[0])  # type: ignore[arg-type]
             else:
                 # NVIDIA GPU index
                 try:

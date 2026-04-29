@@ -300,18 +300,18 @@ def main() -> int:
         device_count = Device.count()
     except libnvml.NVMLError_LibraryNotFound:
         # NVML not found, but AMD GPUs might be available
-        from nvitop.api.device import _check_amd_support, _get_amd_device_count  # noqa: PLC0415
+        from nvitop.api import libamdsmi  # noqa: PLC0415
 
-        if _check_amd_support():
-            device_count = _get_amd_device_count()
+        if libamdsmi.is_available():
+            device_count = libamdsmi.amd_device_count()
         else:
             return 1
     except libnvml.NVMLError as ex:
         # NVML error, but AMD GPUs might be available
-        from nvitop.api.device import _check_amd_support, _get_amd_device_count  # noqa: PLC0415
+        from nvitop.api import libamdsmi  # noqa: PLC0415
 
-        if _check_amd_support():
-            device_count = _get_amd_device_count()
+        if libamdsmi.is_available():
+            device_count = libamdsmi.amd_device_count()
         else:
             print(
                 '{} {}'.format(colored('NVML ERROR:', color='red', attrs=('bold',)), ex),

@@ -82,12 +82,20 @@ class DevicePanel(BasePanel):  # pylint: disable=too-many-instance-attributes
         self.driver_version: str = Device.driver_version()
         self.cuda_driver_version: str = Device.cuda_driver_version()
 
-        # Detect if we have AMD GPUs to adjust header labels
+        # Detect GPU mix to adjust header labels
         self._has_amd_devices: bool = False
+        self._has_nvidia_devices: bool = False
         try:
-            from nvitop.api.device import _check_amd_support  # noqa: PLC0415
+            from nvitop.api import libamdsmi  # noqa: PLC0415
+            from nvitop.api import libnvml  # noqa: PLC0415
 
-            self._has_amd_devices = _check_amd_support()
+            self._has_amd_devices = libamdsmi.is_available()
+            try:
+                self._has_nvidia_devices = (
+                    int(libnvml.nvmlQuery('nvmlDeviceGetCount', default=0)) > 0
+                )
+            except Exception:  # noqa: BLE001
+                pass
         except Exception:  # noqa: BLE001
             pass
 
@@ -235,7 +243,12 @@ class DevicePanel(BasePanel):  # pylint: disable=too-many-instance-attributes
         if compact is None:
             compact = self.compact
 
-        cuda_label = 'ROCm Version' if self._has_amd_devices else 'CUDA Driver Version'
+        if self._has_amd_devices and not self._has_nvidia_devices:
+            cuda_label = 'ROCm Version'
+        elif self._has_amd_devices and self._has_nvidia_devices:
+            cuda_label = 'CUDA/ROCm Version'
+        else:
+            cuda_label = 'CUDA Driver Version'
         version_infos = [
             'NVITOP {}'.format(__version__.partition('+')[0]),
             f'Driver Version: {self.driver_version}',
