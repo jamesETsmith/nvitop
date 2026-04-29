@@ -3,6 +3,12 @@
 
 # pylint: disable=missing-module-docstring
 
+from nvitop.api import (  # noqa: TID251
+    AmdPhysicalDevice,
+    get_all_devices,
+    get_cuda_driver_version,
+    get_driver_version,
+)
 from nvitop.tui.library import host
 from nvitop.tui.library.device import AmdDevice, Device, MigDevice
 from nvitop.tui.library.displayable import Displayable, DisplayableContainer
@@ -63,7 +69,11 @@ __all__ = [
     'USER_CONTEXT',
     'BufferedHistoryGraph',
     'AmdDevice',
+    'AmdPhysicalDevice',
     'Device',
+    'get_all_devices',
+    'get_cuda_driver_version',
+    'get_driver_version',
     'Displayable',
     'DisplayableContainer',
     'GiB',

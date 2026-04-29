@@ -13,22 +13,6 @@ from nvitop.api import MigDevice as MigDeviceBase
 from nvitop.api import PhysicalDevice as DeviceBase
 from nvitop.tui.library.process import GpuProcess, GpuProcessBase
 
-# Lazy import for AMD support
-_AmdDeviceBase = None
-
-
-def _get_amd_device_base():
-    global _AmdDeviceBase  # noqa: PLW0603
-    if _AmdDeviceBase is None:
-        try:
-            from nvitop.api.amd_device import AmdPhysicalDevice  # noqa: PLC0415
-
-            _AmdDeviceBase = AmdPhysicalDevice
-        except ImportError:
-            pass
-    return _AmdDeviceBase
-
-
 __all__ = ['Device', 'MigDevice', 'AmdDevice']
 
 
@@ -52,47 +36,22 @@ class Device(DeviceBase):  # pylint: disable=too-many-public-methods
     GPU_UTILIZATION_THRESHOLDS: ClassVar[tuple[int, int]] = (10, 75)
 
     @classmethod
-    def count(cls):
-        """Count all devices (NVIDIA + AMD)."""
-        from nvitop.api.device import Device as ApiDevice  # noqa: PLC0415
-
-        return ApiDevice.count()
-
-    @classmethod
     def from_indices(cls, indices=None):
-        """Override from_indices to wrap AMD devices with TUI enhancements."""
-        from nvitop.api.device import Device as ApiDevice  # noqa: PLC0415
+        """Return TUI-enhanced device wrappers for all GPUs (NVIDIA and AMD)."""
+        from nvitop.tui.library import AmdPhysicalDevice, get_all_devices  # noqa: PLC0415
 
-        raw_devices = ApiDevice.from_indices(indices)
+        raw_devices = get_all_devices() if indices is None else DeviceBase.from_indices(indices)
 
         tui_devices = []
         for dev in raw_devices:
-            AmdDeviceBase = _get_amd_device_base()
-            if AmdDeviceBase is not None and isinstance(dev, AmdDeviceBase):
-                # Wrap AMD device with TUI-compatible AmdDevice
+            if isinstance(dev, AmdPhysicalDevice):
                 tui_devices.append(AmdDevice(dev))
             else:
-                # NVIDIA device - create TUI Device
                 try:
-                    tui_dev = cls(index=dev.index)
-                    tui_devices.append(tui_dev)
+                    tui_devices.append(cls(index=dev.index))
                 except Exception:  # noqa: BLE001
                     tui_devices.append(dev)
         return tui_devices
-
-    @classmethod
-    def driver_version(cls):
-        """Get driver version (NVIDIA or AMD)."""
-        from nvitop.api.device import Device as ApiDevice  # noqa: PLC0415
-
-        return ApiDevice.driver_version()
-
-    @classmethod
-    def cuda_driver_version(cls):
-        """Get CUDA/ROCm driver version."""
-        from nvitop.api.device import Device as ApiDevice  # noqa: PLC0415
-
-        return ApiDevice.cuda_driver_version()
 
     SNAPSHOT_KEYS: ClassVar[list[str]] = [
         'name',

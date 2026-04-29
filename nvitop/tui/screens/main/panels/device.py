@@ -17,6 +17,8 @@ from nvitop.tui.library import (
     Snapshot,
     colored,
     cut_string,
+    get_cuda_driver_version,
+    get_driver_version,
     make_bar_chart,
     ttl_cache,
 )
@@ -79,23 +81,24 @@ class DevicePanel(BasePanel):  # pylint: disable=too-many-instance-attributes
         if self.device_count == 0:
             self.height = self.full_height = self.compact_height = 6
 
-        self.driver_version: str = Device.driver_version()
-        self.cuda_driver_version: str = Device.cuda_driver_version()
+        self.driver_version: str = get_driver_version()
+        self.cuda_driver_version: str = get_cuda_driver_version()
 
-        # Detect GPU mix to adjust header labels
-        self._has_amd_devices: bool = False
+        # Detect GPU mix to choose the correct header label
         self._has_nvidia_devices: bool = False
+        self._has_amd_devices: bool = False
         try:
-            from nvitop.api import libamdsmi  # noqa: PLC0415
-            from nvitop.api import libnvml  # noqa: PLC0415
+            from nvitop.api import libnvml  # noqa: PLC0415, TID251
+
+            self._has_nvidia_devices = (
+                int(libnvml.nvmlQuery('nvmlDeviceGetCount', default=0)) > 0
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from nvitop.api import libamdsmi  # noqa: PLC0415, TID251
 
             self._has_amd_devices = libamdsmi.is_available()
-            try:
-                self._has_nvidia_devices = (
-                    int(libnvml.nvmlQuery('nvmlDeviceGetCount', default=0)) > 0
-                )
-            except Exception:  # noqa: BLE001
-                pass
         except Exception:  # noqa: BLE001
             pass
 

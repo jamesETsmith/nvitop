@@ -9,7 +9,7 @@ import os
 import sys
 import textwrap
 
-from nvitop.api import HostProcess, libnvml
+from nvitop.api import HostProcess, get_all_devices, get_device_count, get_driver_version, get_cuda_driver_version, libnvml
 from nvitop.tui import TUI, USERNAME, Device, colored, libcurses, set_color, setlocale_utf8
 from nvitop.version import __version__
 
@@ -297,27 +297,17 @@ def main() -> int:
         args.no_unicode = True
 
     try:
-        device_count = Device.count()
+        device_count = get_device_count()
     except libnvml.NVMLError_LibraryNotFound:
-        # NVML not found, but AMD GPUs might be available
-        from nvitop.api import libamdsmi  # noqa: PLC0415
-
-        if libamdsmi.is_available():
-            device_count = libamdsmi.amd_device_count()
-        else:
-            return 1
+        return 1
     except libnvml.NVMLError as ex:
-        # NVML error, but AMD GPUs might be available
-        from nvitop.api import libamdsmi  # noqa: PLC0415
-
-        if libamdsmi.is_available():
-            device_count = libamdsmi.amd_device_count()
-        else:
-            print(
-                '{} {}'.format(colored('NVML ERROR:', color='red', attrs=('bold',)), ex),
-                file=sys.stderr,
-            )
-            return 1
+        print(
+            '{} {}'.format(colored('NVML ERROR:', color='red', attrs=('bold',)), ex),
+            file=sys.stderr,
+        )
+        return 1
+    if device_count == 0:
+        return 1
 
     if args.gpu_util_thresh is not None:
         Device.GPU_UTILIZATION_THRESHOLDS = tuple(sorted(args.gpu_util_thresh))
@@ -339,7 +329,7 @@ def main() -> int:
         }
     else:
         indices = set(range(device_count))
-    devices = Device.from_indices(sorted(indices))
+    devices = [d for d in get_all_devices() if d.index in indices]
 
     filters = []
     if args.compute:
